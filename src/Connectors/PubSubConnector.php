@@ -77,7 +77,9 @@ class PubSubConnector implements ConnectorInterface
         foreach ($gcpConfig as $key => $value) {
             if (in_array($key, static::$exceptKeys, true)) {
                 unset($gcpConfig[$key]);
+                continue;
             }
+
             if (in_array($key, static::$replacedKeys, true)) {
                 Arr::set($gcpConfig, static::$replacedKeys[$key], $value);
                 unset($gcpConfig[$key]);
