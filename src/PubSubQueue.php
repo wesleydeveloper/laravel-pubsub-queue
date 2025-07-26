@@ -61,7 +61,6 @@ class PubSubQueue extends Queue implements QueueContract
      */
     protected $useQueueAsSubscriber;
 
-
     /**
      * Create a new GCP PubSub instance.
      *
@@ -77,7 +76,6 @@ class PubSubQueue extends Queue implements QueueContract
         $this->subscriptionAutoCreation = $config['create_subscriptions'] ?? true;
         $this->queuePrefix = $config['queue_prefix'] ?? '';
         $this->useQueueAsSubscriber = $config['use_queue_as_subscriber'] ?? false;
-
     }
 
     /**
@@ -306,8 +304,6 @@ class PubSubQueue extends Queue implements QueueContract
         return $attributes;
     }
 
-
-
     /**
      * Get the current topic.
      *
@@ -322,7 +318,6 @@ class PubSubQueue extends Queue implements QueueContract
         if ($this->useQueueAsSubscriber) {
             $this->setSubscriberName($queue);
         }
-
 
         $topic = $this->pubsub->topic($queue);
 

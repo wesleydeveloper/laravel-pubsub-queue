@@ -4,8 +4,8 @@ namespace Kainxspirits\PubSubQueue\Connectors;
 
 use Google\Cloud\PubSub\PubSubClient;
 use Illuminate\Queue\Connectors\ConnectorInterface;
-use Illuminate\Support\Str;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
 use Kainxspirits\PubSubQueue\PubSubQueue;
 
 class PubSubConnector implements ConnectorInterface
@@ -23,7 +23,7 @@ class PubSubConnector implements ConnectorInterface
         'preferNumericProjectId',
         'asyncHttpHandler',
         'delayFunc',
-        'calcDelayFunction'
+        'calcDelayFunction',
     ];
 
     protected static $replacedKeys = [
@@ -43,6 +43,7 @@ class PubSubConnector implements ConnectorInterface
         'restRetryFunction' => 'retrySettings.retryFunction',
         'grpcRetryFunction' => 'retrySettings.retryFunction',
     ];
+
     /**
      * Establish a queue connection.
      *
@@ -67,7 +68,6 @@ class PubSubConnector implements ConnectorInterface
      */
     protected function transformConfig($config)
     {
-
         $gcpConfig = array_reduce(array_map([$this, 'transformConfigKeys'], $config, array_keys($config)), function ($carry, $item) {
             $carry[$item[0]] = $item[1];
 
