@@ -80,7 +80,7 @@ class PubSubConnector implements ConnectorInterface
                 continue;
             }
 
-            if (in_array($key, static::$replacedKeys, true)) {
+            if (array_key_exists($key, static::$replacedKeys)) {
                 Arr::set($gcpConfig, static::$replacedKeys[$key], $value);
                 unset($gcpConfig[$key]);
             }
