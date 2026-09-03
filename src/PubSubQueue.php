@@ -62,6 +62,22 @@ class PubSubQueue extends Queue implements QueueContract
     protected $useQueueAsSubscriber;
 
     /**
+     * Max messages to pull per Pub/Sub round-trip. 1 preserves the original
+     * one-message-per-pop() behaviour exactly; >1 enables buffered batch pull.
+     *
+     * @var int
+     */
+    protected $batch = 1;
+
+    /**
+     * In-process buffer of pre-pulled (already acked) messages, keyed by the
+     * resolved queue name. Only used when $batch > 1.
+     *
+     * @var array<string, array<int, \Google\Cloud\PubSub\Message>>
+     */
+    protected $buffer = [];
+
+    /**
      * Create a new GCP PubSub instance.
      *
      * @param  \Google\Cloud\PubSub\PubSubClient  $pubsub
@@ -76,6 +92,7 @@ class PubSubQueue extends Queue implements QueueContract
         $this->subscriptionAutoCreation = $config['create_subscriptions'] ?? true;
         $this->queuePrefix = $config['queue_prefix'] ?? '';
         $this->useQueueAsSubscriber = $config['use_queue_as_subscriber'] ?? false;
+        $this->batch = is_array($config) ? max(1, (int) ($config['batch'] ?? 1)) : 1;
     }
 
     /**
@@ -222,6 +239,12 @@ class PubSubQueue extends Queue implements QueueContract
      */
     public function pop($queue = null)
     {
+        // Batch pull is opt-in. With the default (batch = 1) the original
+        // single-message path below runs unchanged — byte-for-byte behaviour.
+        if ($this->batch > 1) {
+            return $this->popBatched($queue);
+        }
+
         $topic = $this->getTopic($this->getQueue($queue));
 
         if ($this->topicAutoCreation && ! $topic->exists()) {
@@ -251,6 +274,71 @@ class PubSubQueue extends Queue implements QueueContract
             $messages[0],
             $this->connectionName,
             $this->getQueue($queue)
+        );
+    }
+
+    /**
+     * Batched variant of pop(): serves from an in-process buffer, refilling it
+     * with a single pull of up to $batch messages. Preserves the acknowledge
+     * semantics of pop() (messages are acked when pulled, not when the job
+     * finishes) and the available_at delay handling (not-yet-due messages are
+     * left unacked for redelivery). Only reached when $batch > 1.
+     *
+     * @param  string|null  $queue
+     * @return \Illuminate\Contracts\Queue\Job|null
+     */
+    protected function popBatched($queue = null)
+    {
+        $queueName = $this->getQueue($queue);
+
+        // Serve a previously buffered (already acked) message first — no pull.
+        if (! empty($this->buffer[$queueName])) {
+            return new PubSubJob(
+                $this->container,
+                $this,
+                array_shift($this->buffer[$queueName]),
+                $this->connectionName,
+                $queueName
+            );
+        }
+
+        $topic = $this->getTopic($queueName);
+
+        if ($this->topicAutoCreation && ! $topic->exists()) {
+            return;
+        }
+
+        $subscription = $topic->subscription($this->getSubscriberName());
+        $messages = $subscription->pull([
+            'returnImmediately' => true,
+            'maxMessages' => $this->batch,
+        ]);
+
+        if (empty($messages)) {
+            return;
+        }
+
+        foreach ($messages as $message) {
+            $available_at = $message->attribute('available_at');
+            if ($available_at && $available_at > time()) {
+                // Not yet due: leave unacked so Pub/Sub redelivers it later.
+                continue;
+            }
+
+            $this->acknowledge($message, $queue);
+            $this->buffer[$queueName][] = $message;
+        }
+
+        if (empty($this->buffer[$queueName])) {
+            return;
+        }
+
+        return new PubSubJob(
+            $this->container,
+            $this,
+            array_shift($this->buffer[$queueName]),
+            $this->connectionName,
+            $queueName
         );
     }
 

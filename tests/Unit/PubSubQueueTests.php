@@ -482,4 +482,100 @@ final class PubSubQueueTests extends TestCase
     {
         $this->assertTrue($this->queue->getPubSub() instanceof PubSubClient);
     }
+
+    public function testPopBatchBuffersMessagesAndServesFromBufferWithoutRepull(): void
+    {
+        $messages = [];
+        foreach (range(1, 3) as $i) {
+            $message = $this->createMock(Message::class);
+            $message->method('data')->willReturn(base64_encode(json_encode(['foo' => 'bar'])));
+            $messages[] = $message;
+        }
+
+        $subscription = $this->createMock(Subscription::class);
+        // A single pull refills the buffer with all 3 messages...
+        $subscription->expects($this->once())
+            ->method('pull')
+            ->willReturn($messages);
+        // ...and all 3 are acked at pull time (ack-at-pull semantics preserved).
+        $subscription->expects($this->exactly(3))
+            ->method('acknowledge');
+
+        $topic = $this->createMock(Topic::class);
+        $topic->method('exists')->willReturn(true);
+        $topic->method('subscription')->willReturn($subscription);
+
+        $queue = $this->getMockBuilder(PubSubQueue::class)
+            ->setConstructorArgs([$this->client, ['queue' => 'default', 'batch' => 3]])
+            ->onlyMethods(['getTopic'])
+            ->getMock();
+        $queue->method('getTopic')->willReturn($topic);
+        $queue->setContainer($this->createMock(Container::class));
+
+        // 3 pops yield 3 jobs, but the "pull once" expectation above proves the
+        // 2nd and 3rd came from the in-process buffer, not new round-trips.
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+    }
+
+    public function testPopBatchLeavesDelayedMessagesUnacked(): void
+    {
+        $future = Carbon::now()->addSeconds(60)->getTimestamp();
+
+        $delayed = $this->createMock(Message::class);
+        $delayed->method('attribute')->willReturn($future);
+
+        $available = $this->createMock(Message::class);
+        $available->method('attribute')->willReturn(null);
+        $available->method('data')->willReturn(base64_encode(json_encode(['foo' => 'bar'])));
+
+        $subscription = $this->createMock(Subscription::class);
+        $subscription->expects($this->once())
+            ->method('pull')
+            ->willReturn([$delayed, $available]);
+        // Only the available message is acked; the not-yet-due one is left for redelivery.
+        $subscription->expects($this->once())
+            ->method('acknowledge');
+
+        $topic = $this->createMock(Topic::class);
+        $topic->method('exists')->willReturn(true);
+        $topic->method('subscription')->willReturn($subscription);
+
+        $queue = $this->getMockBuilder(PubSubQueue::class)
+            ->setConstructorArgs([$this->client, ['queue' => 'default', 'batch' => 5]])
+            ->onlyMethods(['getTopic'])
+            ->getMock();
+        $queue->method('getTopic')->willReturn($topic);
+        $queue->setContainer($this->createMock(Container::class));
+
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+    }
+
+    public function testBatchDefaultsToOnePullsEveryPop(): void
+    {
+        $message = $this->createMock(Message::class);
+        $message->method('data')->willReturn(base64_encode(json_encode(['foo' => 'bar'])));
+
+        $subscription = $this->createMock(Subscription::class);
+        // Default (no 'batch' key → 1): the original path pulls once PER pop,
+        // never buffers — 2 pops = 2 pulls.
+        $subscription->expects($this->exactly(2))
+            ->method('pull')
+            ->willReturn([$message]);
+
+        $topic = $this->createMock(Topic::class);
+        $topic->method('exists')->willReturn(true);
+        $topic->method('subscription')->willReturn($subscription);
+
+        $queue = $this->getMockBuilder(PubSubQueue::class)
+            ->setConstructorArgs([$this->client, ['queue' => 'default']])
+            ->onlyMethods(['getTopic'])
+            ->getMock();
+        $queue->method('getTopic')->willReturn($topic);
+        $queue->setContainer($this->createMock(Container::class));
+
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+        $this->assertInstanceOf(PubSubJob::class, $queue->pop('workflows'));
+    }
 }
